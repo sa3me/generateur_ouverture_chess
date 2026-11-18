@@ -1,3 +1,4 @@
+import { Chess } from 'chess.js'
 import type { DrawShape } from 'chessground/draw'
 import type { Key } from 'chessground/types'
 import { useEffect, useRef, useState } from 'react'
@@ -7,7 +8,18 @@ import { TreeGraph } from './components/TreeGraph'
 import { TreeView } from './components/TreeView'
 import { Engine } from './lib/engine'
 import { toPgn } from './lib/pgn'
-import { collectTraps, countLines, coverage, createRoot, findNode, isMyTurn, lineText, reachById } from './lib/repertoire'
+import {
+  buds,
+  collectTraps,
+  countLines,
+  coverage,
+  createRoot,
+  findNode,
+  isMyTurn,
+  lineText,
+  parentOf,
+  reachById,
+} from './lib/repertoire'
 import { Session, type Phase } from './lib/session'
 import { DEFAULT_SETTINGS, type RepNode, type Repertoire, type Settings } from './lib/types'
 
@@ -121,6 +133,18 @@ export default function App() {
       ? (node.candidates ?? []).map((c, i) => arrow(c.uci, i === 0 ? 'green' : 'paleBlue'))
       : node.children.map((c) => arrow(c.uci!, c.mover === 'me' ? 'green' : c.trap ? 'red' : 'paleGrey'))
 
+  // Hors construction en cours, on peut jouer n'importe quel coup depuis n'importe quelle position : une branche pousse.
+  const editable = !!rep && !!node && phase !== 'busy' && !node.transposeTo && node.ply < rep.settings.maxMoves * 2
+  const playable = editable ? new Chess(node!.fen).moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion ?? '')) : undefined
+
+  function playOnBoard(uci: string) {
+    if (!node) return
+    const existing = node.children.find((c) => c.uci === uci)
+    if (existing) setSelectedId(existing.id)
+    else session.current?.branch(node.id, uci)
+    setVersion((v) => v + 1)
+  }
+
   const lines = rep && rep.root.children.length ? countLines(rep.root) : 0
   const budget = rep?.settings.budget ?? settings.budget
   const maxMoves = rep?.settings.maxMoves ?? settings.maxMoves
@@ -218,8 +242,8 @@ export default function App() {
           orientation={color}
           lastMove={node?.uci ?? null}
           arrows={arrows}
-          playable={choosing ? node!.candidates!.map((c) => c.uci) : undefined}
-          onMove={(uci) => session.current?.play(uci)}
+          playable={playable}
+          onMove={playOnBoard}
         />
 
         {rep && node && (
@@ -235,6 +259,9 @@ export default function App() {
               {pct(reach.get(node.id) ?? 0)}
               {node.mover === 'opp' && ` · joué dans ${pct(node.share)} des parties`}
               {node.mover === 'opp' && node.moveGames != null && ` (${games(node.moveGames)})`}
+              {node.mover === 'opp' && node.moveGames != null && node.moveGames < rep.settings.minGames && (
+                <span title="Trop peu de parties pour une fréquence fiable"> · coup rare</span>
+              )}
               {node.trap && <span className="trap-flag"> · ⚑ piège : l’adversaire perd {((node.oppLoss ?? 0) / 100).toFixed(1)}</span>}
             </p>
 
@@ -247,29 +274,47 @@ export default function App() {
               </p>
             )}
 
+            {node.mover === 'me' && node.myLoss != null && node.myLoss > rep.settings.maxLoss && (
+              <p className="loss-note">
+                Ce coup perd {(node.myLoss / 100).toFixed(2)} par rapport au meilleur coup de Stockfish (ta limite :{' '}
+                {(rep.settings.maxLoss / 100).toFixed(2)}).
+              </p>
+            )}
+
             {!atCursor ? (
+              <>
+              {editable && (
+                <p className="muted small">Joue un autre coup sur l’échiquier pour faire pousser une branche depuis cette position.</p>
+              )}
               <div className="actions">
                 <button onClick={() => setSelectedId(cursorId)}>Revenir à la position de travail</button>
-                {node.mover === 'me' && (
-                  <button
-                    disabled={phase === 'busy'}
-                    onClick={() => {
-                      const n = countLines(node)
-                      if (n === 1 || confirm(`Remplacer ${node.san} effacera les ${n} lignes qui suivent. Continuer ?`)) {
-                        session.current?.replace(node.id)
-                      }
-                    }}
-                  >
-                    Remplacer ce coup
-                  </button>
-                )}
+                {node.mover === 'me' &&
+                  (() => {
+                    const variant = (parentOf(rep.root, node)?.children.length ?? 0) > 1
+                    const verb = variant ? 'Supprimer' : 'Remplacer'
+                    return (
+                      <button
+                        disabled={phase === 'busy'}
+                        onClick={() => {
+                          const n = countLines(node)
+                          if (n <= 1 || confirm(`${verb} ${node.san} effacera les ${n} lignes qui suivent. Continuer ?`)) {
+                            session.current?.replace(node.id)
+                          }
+                        }}
+                      >
+                        {variant ? 'Supprimer cette variante' : 'Remplacer ce coup'}
+                      </button>
+                    )
+                  })()}
               </div>
+              </>
             ) : phase === 'busy' ? (
               <p className="status">{mine ? 'Stockfish cherche les meilleurs coups…' : 'L’adversaire choisit son coup le plus fréquent…'}</p>
             ) : phase === 'choose' ? (
               <>
                 <p>
-                  <strong>À toi de jouer.</strong> Choisis un des coups de Stockfish, sur l’échiquier ou dans la liste.
+                  <strong>À toi de jouer.</strong> Choisis un des coups de Stockfish, sur l’échiquier ou dans la liste. Tu peux aussi
+                  jouer un autre coup : sa perte sera notée.
                 </p>
                 <table>
                   <thead>
@@ -340,11 +385,28 @@ export default function App() {
         </div>
         {treeView === 'graph' && rep && lines > 0 && (
           <p className="legend">
-            <span className="swatch me" /> mes coups · <span className="swatch opp" /> coups adverses · % = fréquence à ton niveau
+            <span className="swatch me" /> mes coups · <span className="swatch opp" /> coups adverses · <span className="swatch bud" /> réponses pas encore
+            préparées · % = fréquence à ton niveau
           </p>
         )}
         {rep && treeView === 'graph' ? (
-          <TreeGraph root={rep.root} reach={reach} selectedId={node?.id ?? ''} cursorId={cursorId} onSelect={setSelectedId} />
+          <TreeGraph
+            root={rep.root}
+            reach={reach}
+            selectedId={node?.id ?? ''}
+            cursorId={cursorId}
+            onSelect={setSelectedId}
+            budsOf={(n) => buds(n, rep.settings)}
+            onBud={
+              phase === 'busy'
+                ? undefined
+                : (parentId, san) => {
+                    const parent = findNode(rep.root, parentId)
+                    const uci = parent && new Chess(parent.fen).move(san).lan
+                    if (uci) session.current?.branch(parentId, uci)
+                  }
+            }
+          />
         ) : rep ? (
           <TreeView root={rep.root} reach={reach} selectedId={node?.id ?? ''} cursorId={cursorId} onSelect={setSelectedId} />
         ) : (

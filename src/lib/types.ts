@@ -79,6 +79,8 @@ export interface RepNode {
   transposeTo?: string
   /** Éval de la position en centipions, du point de vue des Blancs. */
   evalWhite?: number
+  /** Pour un de mes coups : centipions perdus par rapport au meilleur coup de Stockfish. */
+  myLoss?: number
   /** Pour un coup adverse : centipions perdus par l'adversaire en le jouant. */
   oppLoss?: number
   /** Coup adverse fréquent mais mauvais. */

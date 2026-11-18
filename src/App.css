@@ -212,6 +212,10 @@ tr.trap {
   border: 1px solid var(--edge);
 }
 
+.swatch.bud {
+  border: 1px dashed var(--muted);
+}
+
 .tree-graph {
   position: relative;
   flex: 1;
@@ -320,6 +324,35 @@ tr.trap {
 .node .piece {
   font-size: 1.35em;
   font-weight: 400;
+}
+
+.edge.bud {
+  stroke-dasharray: 4 4;
+  opacity: 0.6;
+}
+
+.node.bud .dot {
+  fill: transparent;
+  stroke-dasharray: 4 3;
+}
+
+.node.bud text {
+  fill: var(--muted);
+}
+
+.node.bud.idle {
+  cursor: default;
+}
+
+.node.bud:not(.idle):hover text {
+  fill: var(--text);
+}
+
+.loss-note {
+  font-size: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--trap);
+  background: var(--bg);
 }
 
 .node.transpo .dot {

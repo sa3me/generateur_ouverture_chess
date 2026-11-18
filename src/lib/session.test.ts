@@ -79,12 +79,52 @@ describe('Session', () => {
     expect(rep.cursorId).toBe(me.children[0].id)
   })
 
-  it('refuse un coup qui n’est pas proposé par Stockfish', async () => {
+  it('accepte un coup hors des propositions de Stockfish et note sa perte', async () => {
     const rep = newRep()
     const { session, next } = startSession(rep)
     await next(() => session.resume())
-    session.play('h2h4')
-    expect(rep.root.children).toHaveLength(0)
+    expect(rep.root.candidates!.some((c) => c.uci === 'h2h4')).toBe(false)
+    expect(await next(() => session.play('h2h4'))).toBe('choose')
+    const h4 = rep.root.children[0]
+    expect(h4.san).toBe('h4')
+    expect(h4.myLoss).toBeGreaterThanOrEqual(0)
+    expect(h4.children).toHaveLength(1)
+  })
+
+  it('un autre coup joué depuis une position de l’arbre pousse une branche à côté', async () => {
+    const rep = newRep()
+    const { session, next } = startSession(rep)
+    await next(() => session.resume())
+    await next(() => session.play(rep.root.candidates![0].uci))
+    const me = rep.root.children[0]
+    const main = me.children[0]
+    // Je reviens sur mon premier coup et je joue moi-même une autre réponse adverse.
+    const other = new Chess(me.fen).moves({ verbose: true }).find((m) => m.san !== main.san)!
+    expect(await next(() => session.branch(me.id, other.from + other.to))).toBe('choose')
+    expect(me.children.map((c) => c.san)).toEqual([main.san, other.san])
+    expect(me.children[1].mover).toBe('opp')
+    // La construction reprend depuis la nouvelle branche : c'est à moi d'y jouer.
+    expect(rep.cursorId).toBe(me.children[1].id)
+
+    // Une deuxième option à mon tour : deux de mes coups à la même position.
+    const alt = rep.root.candidates![1]
+    expect(await next(() => session.branch('', alt.uci))).toBe('choose')
+    expect(rep.root.children).toHaveLength(2)
+    expect(rep.root.children[1].myLoss).toBe(alt.loss)
+
+    // Supprimer une variante ne touche pas l'autre.
+    await next(() => session.replace(rep.root.children[1].id))
+    expect(rep.root.children.map((c) => c.san)).toEqual([me.san])
+  })
+
+  it('ne pousse pas de branche pendant que la construction travaille', async () => {
+    const rep = newRep()
+    const { session, next } = startSession(rep)
+    await next(() => session.resume())
+    const done = next(() => session.play(rep.root.candidates![0].uci))
+    session.branch('', rep.root.candidates![1].uci)
+    await done
+    expect(rep.root.children).toHaveLength(1)
   })
 
   it('construit les lignes par ordre de probabilité jusqu’au budget', async () => {

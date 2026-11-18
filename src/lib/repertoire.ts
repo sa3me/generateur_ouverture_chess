@@ -79,9 +79,17 @@ export function lineText(id: string): string {
     .join(' ')
 }
 
+const clamp = (v: number) => Math.max(-EVAL_CLAMP, Math.min(EVAL_CLAMP, v))
+
+/** Centipions que je perds en jouant `child` plutôt que le meilleur coup de la position `parent`. */
+export function myMoveLoss(parent: RepNode, child: RepNode, color: Color): number | undefined {
+  if (parent.evalWhite == null || child.evalWhite == null) return undefined
+  const mySign = color === 'white' ? 1 : -1
+  return Math.max(0, (clamp(parent.evalWhite) - clamp(child.evalWhite)) * mySign)
+}
+
 function markTrap(parent: RepNode, child: RepNode, color: Color) {
   if (parent.evalWhite == null || child.evalWhite == null) return
-  const clamp = (v: number) => Math.max(-EVAL_CLAMP, Math.min(EVAL_CLAMP, v))
   const mySign = color === 'white' ? 1 : -1
   child.oppLoss = Math.max(0, (clamp(child.evalWhite) - clamp(parent.evalWhite)) * mySign)
   child.trap = child.share >= TRAP_MIN_SHARE && child.oppLoss >= TRAP_MIN_LOSS
@@ -129,6 +137,27 @@ export async function analyzeOppTurn(node: RepNode, s: Settings, engine: Engine)
     : []
   const lines = await engine.analyze(node.fen, 1, s.depth)
   if (lines.length) node.evalWhite = lines[0].cp * (whiteToMove(node.fen) ? 1 : -1)
+}
+
+/** Seuil d'affichage des bourgeons : réponses adverses pas encore préparées. */
+const BUD_MIN_SHARE = 0.05
+const BUD_MAX = 4
+
+/** Les réponses adverses fréquentes pas encore préparées à ce nœud, pour les montrer dans l'arbre. */
+export function buds(node: RepNode, s: Settings): OppMove[] {
+  if (node.transposeTo || node.ply >= s.maxMoves * 2 || isMyTurn(node.fen, s.color)) return []
+  return reliableOppMoves(node, s)
+    .filter((m) => m.share >= BUD_MIN_SHARE && !node.children.some((c) => c.san === m.san))
+    .slice(0, BUD_MAX)
+}
+
+/** Le SAN d'un coup uci dans une position, ou undefined s'il est illégal. */
+export function sanOf(fen: string, uci: string): string | undefined {
+  try {
+    return new Chess(fen).move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san
+  } catch {
+    return undefined
+  }
 }
 
 /** Les coups adverses assez joués pour qu'on s'y fie, du plus au moins fréquent. */
@@ -197,7 +226,8 @@ export function coverage(root: RepNode, ply: number, color: Color): number {
       return target ? rec(target) : 0
     }
     if (node.children.length === 0) return 0
-    if (isMyTurn(node.fen, color)) return rec(node.children[0])
+    // À mon tour, plusieurs coups sont possibles : je choisis celui qui couvre le mieux.
+    if (isMyTurn(node.fen, color)) return Math.max(...node.children.map(rec))
     return node.children.reduce((sum, c) => sum + c.share * rec(c), 0)
   }
   return rec(root)

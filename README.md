@@ -18,12 +18,14 @@ L'Opening Explorer de Lichess exige un **jeton d'accès personnel** (aucune perm
 
 C'est toi qui construis le répertoire, coup par coup, sur l'échiquier. La logique est dans [src/lib/session.ts](src/lib/session.ts) et [src/lib/repertoire.ts](src/lib/repertoire.ts).
 
-- **À ton tour** : Stockfish propose les N meilleurs coups (3 par défaut), sans dépasser `maxLoss` centipions de perte par rapport au meilleur. Tu en joues un sur l'échiquier ; les autres coups sont refusés.
+- **À ton tour** : Stockfish propose les N meilleurs coups (3 par défaut), sans dépasser `maxLoss` centipions de perte par rapport au meilleur. Tu en joues un sur l'échiquier. Un autre coup est accepté, mais sa perte est notée et signalée si elle dépasse `maxLoss`.
 - **Au tour adverse** : l'app joue le coup le plus fréquent chez les joueurs de ta tranche d'Elo (±150) et de ta cadence. Un seul coup adverse entre dans l'arbre à la fois.
 - **Fin de ligne** : à la profondeur choisie, ou quand Lichess n'a plus de données.
-- **Ligne suivante** : l'app ouvre automatiquement la réponse adverse non préparée **la plus probable dans tout l'arbre** (produit des fréquences depuis le début de la partie), rejoue la position et continue. L'ordre est imposé.
+- **Ligne suivante** : l'app ouvre automatiquement la réponse adverse non préparée **la plus probable dans tout l'arbre** (produit des fréquences depuis le début de la partie), rejoue la position et continue.
+- **Branches à la main** : clique sur n'importe quel coup de l'arbre et joue autre chose sur l'échiquier. Une branche pousse à côté et la construction continue depuis elle ; la ligne quittée sera finie plus tard. Au tour adverse, tout coup légal est accepté (« coup rare » s'il a moins de `minGames` parties). À ton tour, un deuxième coup devient une variante : la couverture retient la meilleure.
+- **Bourgeons** : les réponses adverses fréquentes (≥ 5 %, 4 au plus par position) pas encore préparées s'affichent en pointillés dans l'arbre. Un clic en prépare une tout de suite.
 - **Budget** : le répertoire est terminé quand il compte autant de lignes que le budget. « + 5 lignes » relance la construction.
-- **Remplacer un de mes coups** efface sa suite et redemande le choix à cette position.
+- **Remplacer un de mes coups** efface sa suite et redemande le choix à cette position. S'il s'agit d'une variante (j'ai un autre coup à la même position), elle est simplement supprimée.
 - **Transpositions** : un coup qui mène à une position déjà présente dans l'arbre (même position, même demi-coup) devient un renvoi « ↪ ». La ligne s'arrête là et ne compte pas dans le budget. Les probabilités de tous les chemins qui mènent à une même position s'additionnent.
 - **Fiabilité** : un coup adverse n'entre dans le répertoire que s'il a été joué au moins `minGames` fois (30 par défaut) à ton niveau. Pour tes candidats, l'app affiche aussi le score obtenu à ton niveau, quand l'échantillon est suffisant.
 
@@ -44,4 +46,8 @@ Licence : Stockfish est sous GPL v3 (`public/stockfish/Copying.txt`). Si l'app e
 
 1. ~~Construction assistée du répertoire~~ ✔
 2. Entraîneur : drill avec répétition espacée (ts-fsrs), et mode « sortie de livre ».
-3. Import des parties Lichess : comparer le répertoire à ce que tu joues vraiment, élaguer les lignes jamais rencontrées et recalibrer quand l'Elo monte.
+3. Import des parties **Lichess et Chess.com** : comparer le répertoire à ce que tu joues vraiment, élaguer les lignes jamais rencontrées et recalibrer quand l'Elo monte.
+   - Sources : export des parties Lichess (`lichess.org/api/games/user/{pseudo}`) et API publique Chess.com, sans jeton (`api.chess.com/pub/player/{pseudo}/games/archives`, puis un appel par mois, l'un après l'autre).
+   - Un format commun pour toutes les parties (site, date, couleur, cadence, résultat, coups, classements), pour que les analyses ignorent la provenance.
+   - À définir ensemble : la conversion d'un classement Chess.com en équivalent Lichess (l'Opening Explorer n'existe que chez Lichess), la correspondance des cadences, et la part donnée à tes parties face aux fréquences de l'Explorer.
+   - À vérifier au premier essai : l'appel à Chess.com depuis le navigateur (CORS). Depuis le terminal, un appel test a été refusé (403).

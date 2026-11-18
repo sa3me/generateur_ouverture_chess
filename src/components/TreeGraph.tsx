@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { lineText } from '../lib/repertoire'
-import type { RepNode } from '../lib/types'
+import type { OppMove, RepNode } from '../lib/types'
 
 interface Props {
   root: RepNode
@@ -10,6 +10,10 @@ interface Props {
   /** La position de travail, entourée d'un anneau. */
   cursorId: string
   onSelect: (id: string) => void
+  /** Les réponses adverses pas encore préparées à montrer sous un nœud. */
+  budsOf: (node: RepNode) => OppMove[]
+  /** Clic sur un bourgeon : préparer cette réponse. Absent quand la construction est occupée. */
+  onBud?: (parentId: string, san: string) => void
 }
 
 /** Largeur d'une colonne (une ligne du répertoire), hauteur d'un demi-coup, rayon d'un coup. */
@@ -35,17 +39,22 @@ function Label({ san }: { san: string }) {
 const pct = (x: number) => `${Math.round(x * 100)}%`
 
 interface Placed {
+  /** Le nœud ; pour un bourgeon, son parent. */
   node: RepNode
+  /** Réponse adverse pas encore préparée. */
+  bud?: OppMove
+  ply: number
   /** Colonne, éventuellement fractionnaire (centre de ses branches). */
   x: number
   children: Placed[]
 }
 
-/** Chaque ligne occupe une colonne ; un embranchement se place au milieu de ses branches. */
-function place(node: RepNode, next: { col: number }): Placed {
-  const children = node.children.map((c) => place(c, next))
+/** Chaque ligne (ou bourgeon) occupe une colonne ; un embranchement se place au milieu de ses branches. */
+function place(node: RepNode, next: { col: number }, budsOf: Props['budsOf']): Placed {
+  const children = node.children.map((c) => place(c, next, budsOf))
+  for (const bud of budsOf(node)) children.push({ node, bud, ply: node.ply + 1, x: next.col++, children: [] })
   const x = children.length ? (children[0].x + children.at(-1)!.x) / 2 : next.col++
-  return { node, x, children }
+  return { node, ply: node.ply, x, children }
 }
 
 function flatten(p: Placed, out: Placed[] = []): Placed[] {
@@ -62,23 +71,28 @@ function tooltip(n: RepNode, reach: number): string {
   return `${n.san} — ${who}${games} · atteinte ${(reach * 100).toFixed(1)} %${trap}${transpo}`
 }
 
-export function TreeGraph({ root, reach, selectedId, cursorId, onSelect }: Props) {
+function budTooltip(b: OppMove, reach: number, clickable: boolean): string {
+  const act = clickable ? ' · clique pour la préparer' : ''
+  return `${b.san} — joué dans ${pct(b.share)} des parties (${b.games.toLocaleString('fr-FR')}) · pas encore préparé · atteinte ${(reach * 100).toFixed(1)} %${act}`
+}
+
+export function TreeGraph({ root, reach, selectedId, cursorId, onSelect, budsOf, onBud }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
 
   // Avec les Blancs, le tronc est mon premier coup ; avec les Noirs, un point de départ commun.
-  const base = root.children.length === 1 ? root.children[0] : root
-  const placed = place(base, { col: 0 })
+  const base = root.children.length === 1 && budsOf(root).length === 0 ? root.children[0] : root
+  const placed = place(base, { col: 0 }, budsOf)
   const all = flatten(placed)
   const cols = Math.max(1, ...all.map((p) => p.x + 1))
-  const maxPly = Math.max(...all.map((p) => p.node.ply))
+  const maxPly = Math.max(...all.map((p) => p.ply))
   const width = cols * COL + 2 * PAD
   const height = (maxPly - base.ply) * ROW + 2 * PAD
   const cx = (p: Placed) => PAD + p.x * COL + COL / 2
-  const cy = (p: Placed) => height - PAD - (p.node.ply - base.ply) * ROW
+  const cy = (p: Placed) => height - PAD - (p.ply - base.ply) * ROW
 
   // Garde la position de travail en vue quand elle change.
-  const cursor = all.find((p) => p.node.id === cursorId) ?? placed
+  const cursor = all.find((p) => !p.bud && p.node.id === cursorId) ?? placed
   const tx = cx(cursor) * zoom
   const ty = cy(cursor) * zoom
   useEffect(() => {
@@ -103,13 +117,42 @@ export function TreeGraph({ root, reach, selectedId, cursorId, onSelect }: Props
           {all.map((p) => {
             if (p.children.length === 0) return null
             const top = cy(p) - ROW / 2
-            const xs = p.children.map(cx)
+            const real = p.children.filter((c) => !c.bud)
+            const xs = [cx(p), ...real.map(cx)]
             let d = `M${cx(p)} ${cy(p)} V${top} M${Math.min(...xs)} ${top} H${Math.max(...xs)}`
-            for (const c of p.children) d += ` M${cx(c)} ${top} V${cy(c)}`
-            return <path key={`e-${p.node.id}`} d={d} className="edge" />
+            for (const c of real) d += ` M${cx(c)} ${top} V${cy(c)}`
+            let dashed = ''
+            for (const c of p.children.filter((c) => c.bud)) dashed += ` M${cx(p)} ${top} H${cx(c)} V${cy(c)}`
+            return (
+              <g key={`e-${p.node.id}`}>
+                {dashed && <path d={dashed} className="edge bud" />}
+                <path d={d} className="edge" />
+              </g>
+            )
           })}
           {all.map((p) => {
             const n = p.node
+            if (p.bud) {
+              const b = p.bud
+              const r = (reach.get(n.id) ?? 0) * b.share
+              return (
+                <g
+                  key={`b-${n.id}/${b.san}`}
+                  transform={`translate(${cx(p)} ${cy(p)})`}
+                  className={`node bud ${onBud ? '' : 'idle'}`}
+                  onClick={() => onBud?.(n.id, b.san)}
+                >
+                  <title>{budTooltip(b, r, !!onBud)}</title>
+                  <circle r={R} className="dot" />
+                  <text y={-4} className="san" fontSize={b.san.length > 5 ? 10.5 : 13}>
+                    <Label san={b.san} />
+                  </text>
+                  <text y={10} className="pct">
+                    {pct(b.share)}
+                  </text>
+                </g>
+              )
+            }
             if (!n.san) {
               return <circle key="root" cx={cx(p)} cy={cy(p)} r={7} className="root-dot" />
             }
